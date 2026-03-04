@@ -166,17 +166,6 @@ def main() -> None:
 
     episode_idx = np.arange(num_episodes)
 
-    plt.figure(figsize=(8, 5))
-    plt.plot(episode_idx, r_history[:-1], marker="o", linewidth=2.0, label="r_j (margin)")
-    plt.plot(episode_idx, q_history, marker="s", linewidth=2.0, label="q_j (quantile score)")
-    plt.xlabel("Episode")
-    plt.ylabel("Value")
-    plt.title("SR-CR Episodic Margin Adaptation for Robust CLF-QP")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
 
 if __name__ == "__main__":
     main()
