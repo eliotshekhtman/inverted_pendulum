@@ -5,6 +5,16 @@ from __future__ import annotations
 import numpy as np
 
 
+def get_alpha_bar(alpha: float, delta: float, num_trajectories: int) -> float:
+    """Finite-sample adjusted conformal error level from conformal.py logic."""
+    alpha = float(alpha)
+    delta = float(delta)
+    num_trajectories = int(num_trajectories)
+    if num_trajectories <= 0:
+        raise ValueError("num_trajectories must be positive.")
+    return float(alpha - np.sqrt(np.log(1.0 / delta) / (2.0 * num_trajectories)))
+
+
 def compute_trajectory_score(residuals: np.ndarray) -> float:
     """Trajectory score used by conformal update.
 
@@ -18,21 +28,21 @@ def compute_trajectory_score(residuals: np.ndarray) -> float:
     return float(np.max(norms))
 
 
-def compute_quantile(scores: list[float], delta: float) -> float:
-    """Conservative empirical conformal quantile at level (1-delta).
+def compute_quantile(scores: list[float], alpha: float) -> float:
+    """Conservative empirical conformal quantile at level (1-alpha).
 
-    Uses index k = ceil((n+1)(1-delta)), clipped into [1, n], then returns
+    Uses index k = ceil((n+1)(1-alpha)), clipped into [1, n], then returns
     the k-th order statistic.
     """
     if len(scores) == 0:
         return 0.0
 
-    delta = float(delta)
+    alpha = float(alpha)
     sorted_scores = np.sort(np.asarray(scores, dtype=np.float64))
     n = sorted_scores.size
 
-    # Conformal index: k = ceil((n + 1) * (1 - delta)), clipped to [1, n].
-    k = int(np.ceil((n + 1) * (1.0 - delta)))
+    # Conformal index: k = ceil((n + 1) * (1 - alpha)), clipped to [1, n].
+    k = int(np.ceil((n + 1) * (1.0 - alpha)))
     k = int(np.clip(k, 1, n))
     return float(sorted_scores[k - 1])
 

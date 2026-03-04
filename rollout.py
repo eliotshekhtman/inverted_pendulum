@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+from tqdm import tqdm
 
 from clf_controller import RobustCLFController
 from pendulum_env import InvertedPendulum
@@ -17,6 +18,8 @@ def collect_trajectories(
     dt: float,
     rng: np.random.Generator,
     use_random_init: bool = False,
+    show_progress: bool = True,
+    progress_desc: str = "Collecting trajectories",
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     """Run multiple closed-loop rollouts and collect residual traces.
 
@@ -34,7 +37,13 @@ def collect_trajectories(
     all_thetads: list[np.ndarray] = []
     all_v: list[np.ndarray] = []
 
-    for _ in range(int(num_trajs)):
+    traj_iter = tqdm(
+        range(int(num_trajs)),
+        desc=progress_desc,
+        leave=False,
+        disable=not show_progress,
+    )
+    for _ in traj_iter:
         if use_random_init:
             theta0 = rng.uniform(-np.pi / 4.0, np.pi / 4.0)
             theta_dot0 = rng.uniform(-1.0, 1.0)
