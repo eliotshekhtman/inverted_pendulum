@@ -17,15 +17,16 @@ def main() -> None:
     """Run episodic SR-CR loop and plot margin/quantile evolution."""
     delta = 0.10
     kappa = 0.8
-    r_0 = 0.0
-    num_episodes = 15
-    num_trajs_per_episode = 20
+    r_0 = 2.0
+    num_episodes = 5
+    num_trajs_per_episode = 200
     dt = 0.02
-    steps = int(5.0 / dt)
+    steps = int(20.0 / dt)
 
     seed = 42
     rng = np.random.default_rng(seed)
     weights_path = "nominal_model_weights.npz"
+    results_path = "srcr_rollout_data.npz"
 
     env = InvertedPendulum(
         g=9.81,
@@ -65,9 +66,16 @@ def main() -> None:
     r_j = float(r_0)
     r_history = [r_j]
     q_history: list[float] = []
+    used_r_history: list[float] = []
+
+    all_episode_residuals: list[np.ndarray] = []
+    all_episode_theta: list[np.ndarray] = []
+    all_episode_thetad: list[np.ndarray] = []
+    all_episode_v: list[np.ndarray] = []
 
     for episode in range(num_episodes):
-        traj_residuals = collect_trajectories(
+        used_r_history.append(r_j)
+        traj_residuals, traj_theta, traj_thetad, traj_v = collect_trajectories(
             env=env,
             controller=controller,
             r_j=r_j,
@@ -75,8 +83,12 @@ def main() -> None:
             steps=steps,
             dt=dt,
             rng=rng,
-            use_random_init=False,
+            use_random_init=True,
         )
+        all_episode_residuals.append(np.asarray(traj_residuals, dtype=np.float64))
+        all_episode_theta.append(np.asarray(traj_theta, dtype=np.float64))
+        all_episode_thetad.append(np.asarray(traj_thetad, dtype=np.float64))
+        all_episode_v.append(np.asarray(traj_v, dtype=np.float64))
 
         scores = [compute_trajectory_score(residuals) for residuals in traj_residuals]
         q_j = compute_quantile(scores, delta)
@@ -90,6 +102,27 @@ def main() -> None:
             f"Episode {episode:02d} | "
             f"r_j={r_history[-2]:.4f}, q_j={q_j:.4f}, r_next={r_j:.4f}"
         )
+
+    np.savez(
+        results_path,
+        r_j=np.asarray(used_r_history, dtype=np.float64),
+        q_j=np.asarray(q_history, dtype=np.float64),
+        r_full=np.asarray(r_history, dtype=np.float64),
+        theta=np.asarray(all_episode_theta, dtype=np.float64),
+        thetad=np.asarray(all_episode_thetad, dtype=np.float64),
+        v=np.asarray(all_episode_v, dtype=np.float64),
+        residuals=np.asarray(all_episode_residuals, dtype=np.float64),
+        dt=float(dt),
+        steps=int(steps),
+        num_episodes=int(num_episodes),
+        num_trajs_per_episode=int(num_trajs_per_episode),
+        seed=int(seed),
+        k_fb=np.asarray(controller.k_fb, dtype=np.float64),
+        c3=float(controller.c3),
+        delta=float(delta),
+        kappa=float(kappa),
+    )
+    print(f"Saved rollout data to {results_path}")
 
     episode_idx = np.arange(num_episodes)
 

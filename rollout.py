@@ -17,13 +17,22 @@ def collect_trajectories(
     dt: float,
     rng: np.random.Generator,
     use_random_init: bool = False,
-) -> list[np.ndarray]:
+) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     """Run multiple closed-loop rollouts and collect residual traces.
 
     Each returned entry is an array of shape (steps, 2) containing
     epsilon_t = f_true(x_t,u_t,t) - (f_drift(x_t) + g_ctrl(x_t)u_t).
+
+    Returns:
+        residuals_all: list of (steps, 2) residual arrays.
+        thetas_all: list of (steps,) theta trajectories.
+        thetads_all: list of (steps,) theta_dot trajectories.
+        v_all: list of (steps,) CLF value trajectories V(x_t).
     """
     all_residuals: list[np.ndarray] = []
+    all_thetas: list[np.ndarray] = []
+    all_thetads: list[np.ndarray] = []
+    all_v: list[np.ndarray] = []
 
     for _ in range(int(num_trajs)):
         if use_random_init:
@@ -34,9 +43,16 @@ def collect_trajectories(
         x = np.array([theta0, theta_dot0], dtype=np.float64)
 
         traj_residuals = []
+        traj_theta = []
+        traj_thetad = []
+        traj_v = []
         t = 0.0
 
         for _ in range(int(steps)):
+            traj_theta.append(float(x[0]))
+            traj_thetad.append(float(x[1]))
+            traj_v.append(float(controller.V(x)))
+
             u = controller.compute_control(x, r_j)
             eps = env.compute_residual(x, u, t)
             traj_residuals.append(eps)
@@ -45,5 +61,8 @@ def collect_trajectories(
             t += dt
 
         all_residuals.append(np.asarray(traj_residuals, dtype=np.float64))
+        all_thetas.append(np.asarray(traj_theta, dtype=np.float64))
+        all_thetads.append(np.asarray(traj_thetad, dtype=np.float64))
+        all_v.append(np.asarray(traj_v, dtype=np.float64))
 
-    return all_residuals
+    return all_residuals, all_thetas, all_thetads, all_v
