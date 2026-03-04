@@ -8,6 +8,7 @@ Expected arrays in the file:
 - v: (num_episodes, num_trajs, steps) robust trajectories
 - theta_baseline/thetad_baseline/v_baseline: baseline trajectories (r=0),
   either shape (num_trajs, steps) or (num_episodes, num_trajs, steps)
+- optional c1, c2, c3: used for norm decay bound plotting
 """
 
 from __future__ import annotations
@@ -125,6 +126,74 @@ def plot_episode_comparison(
         _save_or_show(fig, out_path, show)
 
 
+def plot_norm_episode_comparison(
+    robust_theta: np.ndarray,
+    robust_thetad: np.ndarray,
+    baseline_theta: np.ndarray,
+    baseline_thetad: np.ndarray,
+    dt: float,
+    out_dir: str,
+    show: bool,
+    c1: float | None = None,
+    c2: float | None = None,
+    c3: float | None = None,
+) -> None:
+    """Plot ||x_t|| over time per episode, with optional theoretical decay bound."""
+    robust_norm = np.sqrt(robust_theta**2 + robust_thetad**2)  # (E, N, T)
+    num_episodes, _, steps = robust_norm.shape
+    t = np.arange(steps) * dt
+
+    if baseline_theta.ndim == 2:
+        baseline_norm = np.sqrt(baseline_theta**2 + baseline_thetad**2)  # (N, T)
+    elif baseline_theta.ndim == 3:
+        baseline_norm = np.sqrt(baseline_theta**2 + baseline_thetad**2)  # (E, N, T)
+    else:
+        raise ValueError("baseline theta/thetad must be shape (N,T) or (E,N,T)")
+
+    for ep in range(num_episodes):
+        if baseline_norm.ndim == 2:
+            baseline_ep = baseline_norm
+        else:
+            baseline_ep = baseline_norm[ep]
+        if baseline_ep.shape[1] != steps:
+            raise ValueError("Baseline and robust norm traces must have same timesteps.")
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        robust_handle = None
+        baseline_handle = None
+        bound_handle = None
+
+        for traj in range(robust_norm.shape[1]):
+            line = ax.plot(t, robust_norm[ep, traj], linewidth=1.0, alpha=0.35, color="tab:orange")[0]
+            if robust_handle is None:
+                robust_handle = line
+        for traj in range(baseline_ep.shape[0]):
+            line = ax.plot(t, baseline_ep[traj], linewidth=1.0, alpha=0.35, color="tab:blue")[0]
+            if baseline_handle is None:
+                baseline_handle = line
+
+        if c1 is not None and c2 is not None and c3 is not None and c1 > 0.0:
+            x0_norm = float(robust_norm[ep, 0, 0])
+            coeff = np.sqrt(float(c2) / float(c1)) * x0_norm
+            norm_ref = coeff * np.exp(-1.5 * float(c3) * t)
+            bound_handle = ax.plot(t, norm_ref, "k:", linewidth=2.0)[0]
+
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel(r"$||x_t||_2$")
+        ax.set_title(f"State Norm vs Time | Episode {ep:02d}")
+        ax.grid(True, alpha=0.3)
+        if bound_handle is None:
+            ax.legend([robust_handle, baseline_handle], ["Robust (r_j)", "Baseline (r=0)"], loc="best")
+        else:
+            ax.legend(
+                [robust_handle, baseline_handle, bound_handle],
+                ["Robust (r_j)", "Baseline (r=0)", r"$\sqrt{c_2/c_1}\|x_0\|e^{-3c_3 t/2}$"],
+                loc="best",
+            )
+        out_path = os.path.join(out_dir, f"norm_ep_{ep:02d}.png")
+        _save_or_show(fig, out_path, show)
+
+
 def _final_state_norm_metric(theta: np.ndarray, thetad: np.ndarray) -> np.ndarray:
     """Average final ||[theta, theta_dot]|| across trajectories."""
     norms = np.sqrt(theta**2 + thetad**2)
@@ -229,6 +298,11 @@ def main() -> None:
     v_baseline = np.asarray(data["v_baseline"], dtype=np.float64)
     dt = float(data["dt"])
     c3 = float(data["c3"]) if "c3" in data.files else 0.5
+    c1 = float(data["c1"]) if "c1" in data.files else None
+    c2 = float(data["c2"]) if "c2" in data.files else None
+
+    if c1 is None or c2 is None:
+        print("c1/c2 not found in data file; norm bound line will be skipped.")
 
     plot_rq(r_j, q_j, out_path=os.path.join(args.out_dir, "rj_qj.png"), show=args.show)
     plot_episode_comparison(
@@ -261,6 +335,18 @@ def main() -> None:
         file_stem="V",
         show=args.show,
         exp_decay_c3=c3,
+    )
+    plot_norm_episode_comparison(
+        robust_theta=theta,
+        robust_thetad=thetad,
+        baseline_theta=theta_baseline,
+        baseline_thetad=thetad_baseline,
+        dt=dt,
+        out_dir=args.out_dir,
+        show=args.show,
+        c1=c1,
+        c2=c2,
+        c3=c3,
     )
 
     robust_final_norm = _final_state_norm_metric(theta, thetad)
