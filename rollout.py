@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from clf_controller import RobustCLFController
 from pendulum_env import InvertedPendulum
+from state_sampling import sample_state_with_target_v
 
 
 def collect_trajectories(
@@ -45,11 +46,15 @@ def collect_trajectories(
     )
     for _ in traj_iter:
         if use_random_init:
-            theta0 = rng.uniform(-np.pi / 4.0, np.pi / 4.0)
-            theta_dot0 = rng.uniform(-1.0, 1.0)
+            x = sample_state_with_target_v(
+                P=controller.P,
+                rng=rng,
+                v_target=1.3,
+                theta_bound=np.pi / 2.0,
+                thetad_bound=10.0,
+            )
         else:
-            theta0, theta_dot0 = 0.76, 0.05
-        x = np.array([theta0, theta_dot0], dtype=np.float64)
+            x = np.array([0.76, 0.05], dtype=np.float64)
 
         traj_residuals = []
         traj_theta = []

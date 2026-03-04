@@ -18,9 +18,10 @@ class InvertedPendulum:
     - residual = (true - nominal), used by conformal updates
 
     Nominal model parameterization:
-      phi(x) = [1, theta, theta_dot, theta^2, theta*theta_dot, theta_dot^2]
-      f_drift(x) = Mf @ phi(x),   Mf shape (2, 6)
-      g_ctrl(x)  = Mg @ phi(x),   Mg shape (2, 6)
+      phi(x) = feature vector returned by features(x)
+      f_drift(x) = Mf @ phi(x),   Mf shape (2, m)
+      g_ctrl(x)  = Mg @ phi(x),   Mg shape (2, m)
+      where m = len(phi(x)).
     """
 
     def __init__(
@@ -63,8 +64,8 @@ class InvertedPendulum:
         self.u_max = float(u_max)
         self.disturbance_amp = float(disturbance_amp)
         self.disturbance_freq = float(disturbance_freq)
-        self.Mf = np.zeros((2, 6), dtype=np.float64)
-        self.Mg = np.zeros((2, 6), dtype=np.float64)
+        self.Mf = np.zeros((2, self.feature_dim()), dtype=np.float64)
+        self.Mg = np.zeros((2, self.feature_dim()), dtype=np.float64)
 
         if nominal_weights_path is not None:
             self.load_nominal_weights(nominal_weights_path)
@@ -99,16 +100,25 @@ class InvertedPendulum:
                 theta**2,
                 theta * theta_dot,
                 theta_dot**2,
+                theta**3,
+                theta**2 * theta_dot,
+                theta * theta_dot**2,
+                theta_dot**3,
             ],
             dtype=np.float64,
         )
+
+    def feature_dim(self) -> int:
+        """Current feature vector length m used by Mf/Mg."""
+        return int(self.features(np.zeros(2, dtype=np.float64)).size)
 
     def set_nominal_weights(self, Mf: np.ndarray, Mg: np.ndarray) -> None:
         """Set learned nominal model weights after shape/type validation."""
         Mf = np.asarray(Mf, dtype=np.float64)
         Mg = np.asarray(Mg, dtype=np.float64)
-        if Mf.shape != (2, 6) or Mg.shape != (2, 6):
-            raise ValueError("Mf and Mg must both have shape (2, 6).")
+        expected = (2, self.feature_dim())
+        if Mf.shape != expected or Mg.shape != expected:
+            raise ValueError(f"Mf and Mg must both have shape {expected}, got {Mf.shape} and {Mg.shape}.")
         self.Mf = Mf
         self.Mg = Mg
 
@@ -131,8 +141,11 @@ class InvertedPendulum:
         c_dtheta = -self.b_hat / I_hat
         c_u = -1.0 / I_hat
 
-        Mf = np.zeros((2, 6), dtype=np.float64)
-        Mg = np.zeros((2, 6), dtype=np.float64)
+        m = self.feature_dim()
+        if m < 3:
+            raise RuntimeError("Feature vector must have at least 3 entries for bootstrap nominal model.")
+        Mf = np.zeros((2, m), dtype=np.float64)
+        Mg = np.zeros((2, m), dtype=np.float64)
         Mf[0, 2] = 1.0
         Mf[1, 1] = c_theta
         Mf[1, 2] = c_dtheta
