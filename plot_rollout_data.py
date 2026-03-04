@@ -138,7 +138,7 @@ def plot_norm_episode_comparison(
     c2: float | None = None,
     c3: float | None = None,
 ) -> None:
-    """Plot ||x_t|| over time per episode, with optional theoretical decay bound."""
+    """Plot ||x_t|| over time per episode, with optional per-trajectory decay bounds."""
     robust_norm = np.sqrt(robust_theta**2 + robust_thetad**2)  # (E, N, T)
     num_episodes, _, steps = robust_norm.shape
     t = np.arange(steps) * dt
@@ -161,7 +161,8 @@ def plot_norm_episode_comparison(
         fig, ax = plt.subplots(figsize=(8, 5))
         robust_handle = None
         baseline_handle = None
-        bound_handle = None
+        robust_bound_handle = None
+        baseline_bound_handle = None
 
         for traj in range(robust_norm.shape[1]):
             line = ax.plot(t, robust_norm[ep, traj], linewidth=1.0, alpha=0.35, color="tab:orange")[0]
@@ -173,21 +174,35 @@ def plot_norm_episode_comparison(
                 baseline_handle = line
 
         if c1 is not None and c2 is not None and c3 is not None and c1 > 0.0:
-            x0_norm = float(robust_norm[ep, 0, 0])
-            coeff = np.sqrt(float(c2) / float(c1)) * x0_norm
-            norm_ref = coeff * np.exp(-1.5 * float(c3) * t)
-            bound_handle = ax.plot(t, norm_ref, "k:", linewidth=2.0)[0]
+            # Per-trajectory bounds: each trajectory uses its own ||x0||.
+            decay = np.exp(-1.5 * float(c3) * t)
+            gain = np.sqrt(float(c2) / float(c1))
+            for traj in range(robust_norm.shape[1]):
+                coeff = gain * float(robust_norm[ep, traj, 0])
+                line = ax.plot(t, coeff * decay, ":", linewidth=1.0, alpha=0.20, color="tab:orange")[0]
+                if robust_bound_handle is None:
+                    robust_bound_handle = line
+            for traj in range(baseline_ep.shape[0]):
+                coeff = gain * float(baseline_ep[traj, 0])
+                line = ax.plot(t, coeff * decay, ":", linewidth=1.0, alpha=0.20, color="tab:blue")[0]
+                if baseline_bound_handle is None:
+                    baseline_bound_handle = line
 
         ax.set_xlabel("Time (s)")
         ax.set_ylabel(r"$||x_t||_2$")
         ax.set_title(f"State Norm vs Time | Episode {ep:02d}")
         ax.grid(True, alpha=0.3)
-        if bound_handle is None:
+        if robust_bound_handle is None or baseline_bound_handle is None:
             ax.legend([robust_handle, baseline_handle], ["Robust (r_j)", "Baseline (r=0)"], loc="best")
         else:
             ax.legend(
-                [robust_handle, baseline_handle, bound_handle],
-                ["Robust (r_j)", "Baseline (r=0)", r"$\sqrt{c_2/c_1}\|x_0\|e^{-3c_3 t/2}$"],
+                [robust_handle, baseline_handle, robust_bound_handle, baseline_bound_handle],
+                [
+                    "Robust (r_j)",
+                    "Baseline (r=0)",
+                    r"Robust bound: $\sqrt{c_2/c_1}\|x_{0,i}\|e^{-3c_3 t/2}$",
+                    r"Baseline bound: $\sqrt{c_2/c_1}\|x_{0,i}\|e^{-3c_3 t/2}$",
+                ],
                 loc="best",
             )
         out_path = os.path.join(out_dir, f"norm_ep_{ep:02d}.png")
@@ -283,6 +298,137 @@ def plot_episode_metric(
     _save_or_show(fig, out_path, show)
 
 
+def _bound_exceedance_fraction_per_episode(
+    robust_theta: np.ndarray,
+    robust_thetad: np.ndarray,
+    baseline_theta: np.ndarray,
+    baseline_thetad: np.ndarray,
+    dt: float,
+    c1: float,
+    c2: float,
+    c3: float,
+    tol: float = 1e-9,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return per-episode fraction of trajectories that ever exceed norm bound.
+
+    Bound for each trajectory i in episode e:
+        b_{e,i}(t) = sqrt(c2/c1) * ||x0_{e,i}|| * exp(-3*c3*t/2)
+    """
+    robust_norm = np.sqrt(robust_theta**2 + robust_thetad**2)  # (E, N, T)
+    num_episodes, _, steps = robust_norm.shape
+    t = np.arange(steps) * dt
+
+    if baseline_theta.ndim == 2:
+        baseline_norm = np.sqrt(baseline_theta**2 + baseline_thetad**2)  # (N, T)
+    elif baseline_theta.ndim == 3:
+        baseline_norm = np.sqrt(baseline_theta**2 + baseline_thetad**2)  # (E, N, T)
+    else:
+        raise ValueError("baseline theta/thetad must be shape (N,T) or (E,N,T)")
+
+    robust_frac = np.zeros(num_episodes, dtype=np.float64)
+    baseline_frac = np.zeros(num_episodes, dtype=np.float64)
+
+    for ep in range(num_episodes):
+        gain = np.sqrt(float(c2) / float(c1))
+        decay = np.exp(-1.5 * float(c3) * t)[None, :]  # (1, T)
+        robust_bound = gain * robust_norm[ep, :, 0][:, None] * decay  # (N, T)
+
+        # Ignore t=0 and use tolerance to avoid floating-point false positives.
+        robust_exceeds = np.any(robust_norm[ep, :, 1:] > robust_bound[:, 1:] + tol, axis=1)  # (N,)
+        robust_frac[ep] = float(np.mean(robust_exceeds))
+
+        if baseline_norm.ndim == 2:
+            baseline_ep = baseline_norm
+        else:
+            baseline_ep = baseline_norm[ep]
+        baseline_bound = gain * baseline_ep[:, 0][:, None] * decay  # (N, T)
+        baseline_exceeds = np.any(baseline_ep[:, 1:] > baseline_bound[:, 1:] + tol, axis=1)
+        baseline_frac[ep] = float(np.mean(baseline_exceeds))
+
+    return robust_frac, baseline_frac
+
+
+def plot_bound_exceedance_fraction(
+    robust_frac: np.ndarray,
+    baseline_frac: np.ndarray,
+    alpha: float,
+    out_path: str,
+    show: bool,
+) -> None:
+    """Plot per-episode fraction of trajectories with bound exceedance."""
+    episodes = np.arange(robust_frac.size)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(episodes, robust_frac, marker="o", linewidth=2.0, color="tab:orange", label="Robust")
+    ax.plot(episodes, baseline_frac, marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
+    ax.axhline(1.0 - float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$1-\alpha$")
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Fraction of trajectories")
+    ax.set_title(r"Fraction with $\exists t:\|x_t\| > \sqrt{c_2/c_1}\|x_0\|e^{-3c_3 t/2}$")
+    ax.set_ylim(-0.02, 1.02)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    _save_or_show(fig, out_path, show)
+
+
+def _v_exceedance_fraction_per_episode(
+    robust_v: np.ndarray,
+    baseline_v: np.ndarray,
+    dt: float,
+    c3: float,
+    tol: float = 1e-9,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return per-episode fraction of trajectories that ever exceed V decay condition.
+
+    Condition for each trajectory i in episode e:
+        V(x_t) <= V(x_{0,i}) * exp(-c3 * t)
+    """
+    num_episodes, _, steps = robust_v.shape
+    t = np.arange(steps) * dt
+
+    if baseline_v.ndim not in (2, 3):
+        raise ValueError("baseline_v must be shape (N,T) or (E,N,T)")
+
+    robust_frac = np.zeros(num_episodes, dtype=np.float64)
+    baseline_frac = np.zeros(num_episodes, dtype=np.float64)
+
+    for ep in range(num_episodes):
+        decay = np.exp(-float(c3) * t)[None, :]  # (1, T)
+        robust_bound = robust_v[ep, :, 0][:, None] * decay  # (N, T)
+
+        # Ignore t=0 and use tolerance to avoid floating-point false positives.
+        robust_exceeds = np.any(robust_v[ep, :, 1:] > robust_bound[:, 1:] + tol, axis=1)  # (N,)
+        robust_frac[ep] = float(np.mean(robust_exceeds))
+
+        baseline_ep = baseline_v if baseline_v.ndim == 2 else baseline_v[ep]
+        baseline_bound = baseline_ep[:, 0][:, None] * decay  # (N, T)
+        baseline_exceeds = np.any(baseline_ep[:, 1:] > baseline_bound[:, 1:] + tol, axis=1)
+        baseline_frac[ep] = float(np.mean(baseline_exceeds))
+
+    return robust_frac, baseline_frac
+
+
+def plot_v_exceedance_fraction(
+    robust_frac: np.ndarray,
+    baseline_frac: np.ndarray,
+    alpha: float,
+    out_path: str,
+    show: bool,
+) -> None:
+    """Plot per-episode fraction of trajectories with V-condition exceedance."""
+    episodes = np.arange(robust_frac.size)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(episodes, robust_frac, marker="o", linewidth=2.0, color="tab:orange", label="Robust")
+    ax.plot(episodes, baseline_frac, marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
+    ax.axhline(1.0 - float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$1-\alpha$")
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Fraction of trajectories")
+    ax.set_title(r"Fraction with $\exists t: V(x_t) > V(x_0)e^{-c_3 t}$")
+    ax.set_ylim(-0.02, 1.02)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    _save_or_show(fig, out_path, show)
+
+
 def main() -> None:
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -300,6 +446,7 @@ def main() -> None:
     c3 = float(data["c3"]) if "c3" in data.files else 0.5
     c1 = float(data["c1"]) if "c1" in data.files else None
     c2 = float(data["c2"]) if "c2" in data.files else None
+    alpha = float(data["alpha"]) if "alpha" in data.files else 0.1
 
     if c1 is None or c2 is None:
         print("c1/c2 not found in data file; norm bound line will be skipped.")
@@ -379,6 +526,41 @@ def main() -> None:
         y_label=r"Avg progress: ||x_{t-1}|| - ||x_t||",
         title="Average Progress Metric vs Episode",
         out_path=os.path.join(args.out_dir, "progress_vs_episode.png"),
+        show=args.show,
+    )
+
+    if c1 is not None and c2 is not None and c1 > 0.0:
+        robust_frac, baseline_frac = _bound_exceedance_fraction_per_episode(
+            robust_theta=theta,
+            robust_thetad=thetad,
+            baseline_theta=theta_baseline,
+            baseline_thetad=thetad_baseline,
+            dt=dt,
+            c1=float(c1),
+            c2=float(c2),
+            c3=float(c3),
+        )
+        plot_bound_exceedance_fraction(
+            robust_frac=robust_frac,
+            baseline_frac=baseline_frac,
+            alpha=alpha,
+            out_path=os.path.join(args.out_dir, "bound_exceedance_fraction_vs_episode.png"),
+            show=args.show,
+        )
+    else:
+        print("Skipping bound exceedance fraction plot because c1/c2 are unavailable.")
+
+    robust_v_frac, baseline_v_frac = _v_exceedance_fraction_per_episode(
+        robust_v=v,
+        baseline_v=v_baseline,
+        dt=dt,
+        c3=float(c3),
+    )
+    plot_v_exceedance_fraction(
+        robust_frac=robust_v_frac,
+        baseline_frac=baseline_v_frac,
+        alpha=alpha,
+        out_path=os.path.join(args.out_dir, "v_exceedance_fraction_vs_episode.png"),
         show=args.show,
     )
 
