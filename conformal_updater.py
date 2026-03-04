@@ -6,7 +6,11 @@ import numpy as np
 
 
 def compute_trajectory_score(residuals: np.ndarray) -> float:
-    """Return S = max_t ||epsilon_t||_2 for one trajectory."""
+    """Trajectory score used by conformal update.
+
+    For one rollout, compute the worst (largest) residual magnitude over time:
+    S = max_t ||epsilon_t||_2.
+    """
     residuals = np.asarray(residuals, dtype=np.float64)
     if residuals.size == 0:
         return 0.0
@@ -15,7 +19,11 @@ def compute_trajectory_score(residuals: np.ndarray) -> float:
 
 
 def compute_quantile(scores: list[float], delta: float) -> float:
-    """Conservative conformal-style empirical (1-delta)-quantile."""
+    """Conservative empirical conformal quantile at level (1-delta).
+
+    Uses index k = ceil((n+1)(1-delta)), clipped into [1, n], then returns
+    the k-th order statistic.
+    """
     if len(scores) == 0:
         return 0.0
 
@@ -30,7 +38,7 @@ def compute_quantile(scores: list[float], delta: float) -> float:
 
 
 def update_margin(q_j: float, r_j: float, kappa: float) -> float:
-    """Piecewise affine SR-CR update for next episode margin."""
+    """Apply SR-CR margin recursion to produce next episode radius r_{j+1}."""
     q_j = float(q_j)
     r_j = float(r_j)
     kappa = float(kappa)

@@ -12,19 +12,40 @@ from rollout import collect_trajectories
 
 
 def main() -> None:
+    """Run episodic SR-CR loop and plot margin/quantile evolution."""
     delta = 0.10
     kappa = 0.8
     r_0 = 0.0
     num_episodes = 15
     num_trajs_per_episode = 20
-    dt = 0.05
-    steps = 100
+    dt = 0.02
+    steps = int(5.0 / dt)
 
     seed = 42
     rng = np.random.default_rng(seed)
 
-    env = InvertedPendulum()
-    controller = RobustCLFController(env=env)
+    env = InvertedPendulum(
+        g=9.81,
+        m=1.0,
+        l=1.0,
+        b=0.01,
+        m_hat=1.0,
+        l_hat=1.0,
+        b_hat=0.01,
+        u_min=-7.0,
+        u_max=7.0,
+        disturbance_amp=0.0,
+    )
+    controller = RobustCLFController(
+        env=env,
+        kp=6.0,
+        kd=5.0,
+        clf_rate=3.0,
+        weight_input=1.0,
+        weight_slack=100000.0,
+        u_ref=0.0,
+        use_robust_term=False,
+    )
 
     r_j = float(r_0)
     r_history = [r_j]
@@ -39,6 +60,7 @@ def main() -> None:
             steps=steps,
             dt=dt,
             rng=rng,
+            use_random_init=False,
         )
 
         scores = [compute_trajectory_score(residuals) for residuals in traj_residuals]

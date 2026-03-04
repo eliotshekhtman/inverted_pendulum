@@ -16,13 +16,21 @@ def collect_trajectories(
     steps: int,
     dt: float,
     rng: np.random.Generator,
+    use_random_init: bool = False,
 ) -> list[np.ndarray]:
-    """Collect trajectory residuals under robust CLF-QP control at margin r_j."""
+    """Run multiple closed-loop rollouts and collect residual traces.
+
+    Each returned entry is an array of shape (steps, 2) containing
+    epsilon_t = f_true(x_t,u_t,t) - (f_drift(x_t) + g_ctrl(x_t)u_t).
+    """
     all_residuals: list[np.ndarray] = []
 
     for _ in range(int(num_trajs)):
-        theta0 = rng.uniform(-np.pi / 4.0, np.pi / 4.0)
-        theta_dot0 = rng.uniform(-1.0, 1.0)
+        if use_random_init:
+            theta0 = rng.uniform(-np.pi / 4.0, np.pi / 4.0)
+            theta_dot0 = rng.uniform(-1.0, 1.0)
+        else:
+            theta0, theta_dot0 = 0.76, 0.05
         x = np.array([theta0, theta_dot0], dtype=np.float64)
 
         traj_residuals = []
