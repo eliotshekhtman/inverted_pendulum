@@ -125,6 +125,95 @@ def plot_episode_comparison(
         _save_or_show(fig, out_path, show)
 
 
+def _final_state_norm_metric(theta: np.ndarray, thetad: np.ndarray) -> np.ndarray:
+    """Average final ||[theta, theta_dot]|| across trajectories."""
+    norms = np.sqrt(theta**2 + thetad**2)
+    return np.mean(norms[:, :, -1], axis=1)
+
+
+def _final_v_metric(v: np.ndarray) -> np.ndarray:
+    """Average final V(x_T) across trajectories."""
+    return np.mean(v[:, :, -1], axis=1)
+
+
+def _progress_metric(theta: np.ndarray, thetad: np.ndarray) -> np.ndarray:
+    """Average progress per episode: ||x_{t-1}|| - ||x_t||, averaged in time and trajectories."""
+    norms = np.sqrt(theta**2 + thetad**2)  # (E, N, T)
+    delta = norms[:, :, :-1] - norms[:, :, 1:]  # (E, N, T-1)
+    per_traj = np.mean(delta, axis=2)  # (E, N)
+    return np.mean(per_traj, axis=1)  # (E,)
+
+
+def _baseline_metric(
+    theta_baseline: np.ndarray,
+    thetad_baseline: np.ndarray,
+    v_baseline: np.ndarray,
+    metric: str,
+) -> np.ndarray | float:
+    """Compute baseline metric for either single-run baseline or legacy per-episode baseline."""
+    if theta_baseline.ndim == 2:
+        # (N, T)
+        if metric == "final_state_norm":
+            norms = np.sqrt(theta_baseline**2 + thetad_baseline**2)
+            return float(np.mean(norms[:, -1]))
+        if metric == "final_v":
+            return float(np.mean(v_baseline[:, -1]))
+        if metric == "progress":
+            norms = np.sqrt(theta_baseline**2 + thetad_baseline**2)
+            delta = norms[:, :-1] - norms[:, 1:]
+            return float(np.mean(np.mean(delta, axis=1)))
+        raise ValueError(f"Unknown metric: {metric}")
+
+    # Legacy shape (E, N, T)
+    if metric == "final_state_norm":
+        return _final_state_norm_metric(theta_baseline, thetad_baseline)
+    if metric == "final_v":
+        return _final_v_metric(v_baseline)
+    if metric == "progress":
+        return _progress_metric(theta_baseline, thetad_baseline)
+    raise ValueError(f"Unknown metric: {metric}")
+
+
+def plot_episode_metric(
+    robust_metric: np.ndarray,
+    baseline_metric: np.ndarray | float,
+    y_label: str,
+    title: str,
+    out_path: str,
+    show: bool,
+) -> None:
+    """Plot one per-episode scalar metric for robust and baseline controllers."""
+    episodes = np.arange(robust_metric.size)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    robust_handle = ax.plot(episodes, robust_metric, marker="o", linewidth=2.0, color="tab:orange", label="Robust")[0]
+
+    if np.isscalar(baseline_metric):
+        baseline_handle = ax.axhline(
+            float(baseline_metric),
+            linestyle="--",
+            linewidth=2.0,
+            color="tab:blue",
+            label="Baseline (r=0)",
+        )
+    else:
+        baseline_metric = np.asarray(baseline_metric, dtype=np.float64)
+        baseline_handle = ax.plot(
+            episodes,
+            baseline_metric,
+            marker="s",
+            linewidth=2.0,
+            color="tab:blue",
+            label="Baseline (r=0)",
+        )[0]
+
+    ax.set_xlabel("Episode")
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+    ax.legend(handles=[robust_handle, baseline_handle], loc="best")
+    _save_or_show(fig, out_path, show)
+
+
 def main() -> None:
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -172,6 +261,39 @@ def main() -> None:
         file_stem="V",
         show=args.show,
         exp_decay_c3=c3,
+    )
+
+    robust_final_norm = _final_state_norm_metric(theta, thetad)
+    robust_final_v = _final_v_metric(v)
+    robust_progress = _progress_metric(theta, thetad)
+
+    baseline_final_norm = _baseline_metric(theta_baseline, thetad_baseline, v_baseline, "final_state_norm")
+    baseline_final_v = _baseline_metric(theta_baseline, thetad_baseline, v_baseline, "final_v")
+    baseline_progress = _baseline_metric(theta_baseline, thetad_baseline, v_baseline, "progress")
+
+    plot_episode_metric(
+        robust_metric=robust_final_norm,
+        baseline_metric=baseline_final_norm,
+        y_label=r"Avg final ||[theta, \dot{theta}]||",
+        title="Average Final State Norm vs Episode",
+        out_path=os.path.join(args.out_dir, "final_state_norm_vs_episode.png"),
+        show=args.show,
+    )
+    plot_episode_metric(
+        robust_metric=robust_final_v,
+        baseline_metric=baseline_final_v,
+        y_label="Avg final V(x_T)",
+        title="Average Final CLF Value vs Episode",
+        out_path=os.path.join(args.out_dir, "final_v_vs_episode.png"),
+        show=args.show,
+    )
+    plot_episode_metric(
+        robust_metric=robust_progress,
+        baseline_metric=baseline_progress,
+        y_label=r"Avg progress: ||x_{t-1}|| - ||x_t||",
+        title="Average Progress Metric vs Episode",
+        out_path=os.path.join(args.out_dir, "progress_vs_episode.png"),
+        show=args.show,
     )
 
     if not args.show:
