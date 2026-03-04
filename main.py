@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -23,6 +25,7 @@ def main() -> None:
 
     seed = 42
     rng = np.random.default_rng(seed)
+    weights_path = "nominal_model_weights.npz"
 
     env = InvertedPendulum(
         g=9.81,
@@ -36,16 +39,28 @@ def main() -> None:
         u_max=7.0,
         disturbance_amp=0.0,
     )
+    if os.path.exists(weights_path):
+        env.load_nominal_weights(weights_path)
+        print(f"Loaded nominal model weights from {weights_path}")
+    else:
+        print(
+            f"Nominal weights file '{weights_path}' not found. "
+            "Using bootstrap nominal weights."
+        )
+
     controller = RobustCLFController(
         env=env,
-        kp=6.0,
-        kd=5.0,
-        clf_rate=3.0,
+        k_fb=(8.0, 5.0),
+        c3=0.5,
         weight_input=1.0,
         weight_slack=100000.0,
         u_ref=0.0,
         use_robust_term=False,
+        auto_select_k=True,
+        stability_margin=1e-3,
+        max_p_condition=1e7,
     )
+    print(f"CLF linearization gain K used: {controller.k_fb.tolist()}")
 
     r_j = float(r_0)
     r_history = [r_j]
