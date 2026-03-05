@@ -8,7 +8,7 @@ Expected arrays in the file:
 - v: (num_episodes, num_trajs, steps) robust trajectories
 - theta_baseline/thetad_baseline/v_baseline: baseline trajectories (r=0),
   either shape (num_trajs, steps) or (num_episodes, num_trajs, steps)
-- optional c1, c2, c3: used for norm decay bound plotting
+- optional P (2x2), c1, c2, c3: used for Lyapunov consistency checks and bounds
 """
 
 from __future__ import annotations
@@ -21,6 +21,9 @@ import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+
+DEFAULT_TOL = 1e-9
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,7 +96,8 @@ def plot_episode_comparison(
         fig, ax = plt.subplots(figsize=(8, 5))
         robust_handle = None
         baseline_handle = None
-        exp_handle = None
+        robust_exp_handle = None
+        baseline_exp_handle = None
         for traj in range(robust_data.shape[1]):
             line = ax.plot(t, robust_data[ep, traj], linewidth=1.0, alpha=0.35, color="tab:orange")[0]
             if robust_handle is None:
@@ -103,23 +107,46 @@ def plot_episode_comparison(
             if baseline_handle is None:
                 baseline_handle = line
         if exp_decay_c3 is not None:
-            v0 = float(robust_data[ep, 0, 0])
-            v_ref = v0 * np.exp(-float(exp_decay_c3) * t)
-            exp_handle = ax.plot(t, v_ref, "k:", linewidth=2.0)[0]
+            decay = np.exp(-float(exp_decay_c3) * t)
+            for traj in range(robust_data.shape[1]):
+                v0 = float(robust_data[ep, traj, 0])
+                line = ax.plot(t, v0 * decay, ":", linewidth=1.0, alpha=0.20, color="tab:orange")[0]
+                if robust_exp_handle is None:
+                    robust_exp_handle = line
+            for traj in range(baseline_ep.shape[0]):
+                v0 = float(baseline_ep[traj, 0])
+                line = ax.plot(t, v0 * decay, ":", linewidth=1.0, alpha=0.20, color="tab:blue")[0]
+                if baseline_exp_handle is None:
+                    baseline_exp_handle = line
         ax.set_xlabel("Time (s)")
         ax.set_ylabel(y_label)
         ax.set_title(f"{title_prefix} | Episode {ep:02d}")
         ax.grid(True, alpha=0.3)
-        if robust_handle is not None and baseline_handle is not None and exp_handle is None:
+        if (
+            robust_handle is not None
+            and baseline_handle is not None
+            and robust_exp_handle is None
+            and baseline_exp_handle is None
+        ):
             ax.legend(
                 [robust_handle, baseline_handle],
                 ["Robust (r_j)", "Baseline (r=0)"],
                 loc="best",
             )
-        if robust_handle is not None and baseline_handle is not None and exp_handle is not None:
+        if (
+            robust_handle is not None
+            and baseline_handle is not None
+            and robust_exp_handle is not None
+            and baseline_exp_handle is not None
+        ):
             ax.legend(
-                [robust_handle, baseline_handle, exp_handle],
-                ["Robust (r_j)", "Baseline (r=0)", r"$V(x_0)e^{-c_3 t}$"],
+                [robust_handle, baseline_handle, robust_exp_handle, baseline_exp_handle],
+                [
+                    "Robust (r_j)",
+                    "Baseline (r=0)",
+                    r"Robust bound: $V(x_{0,i})e^{-c_3 t}$",
+                    r"Baseline bound: $V(x_{0,i})e^{-c_3 t}$",
+                ],
                 loc="best",
             )
         out_path = os.path.join(out_dir, f"{file_stem}_ep_{ep:02d}.png")
@@ -175,7 +202,7 @@ def plot_norm_episode_comparison(
 
         if c1 is not None and c2 is not None and c3 is not None and c1 > 0.0:
             # Per-trajectory bounds: each trajectory uses its own ||x0||.
-            decay = np.exp(-1.5 * float(c3) * t)
+            decay = np.exp(-0.5 * float(c3) * t)
             gain = np.sqrt(float(c2) / float(c1))
             for traj in range(robust_norm.shape[1]):
                 coeff = gain * float(robust_norm[ep, traj, 0])
@@ -200,8 +227,8 @@ def plot_norm_episode_comparison(
                 [
                     "Robust (r_j)",
                     "Baseline (r=0)",
-                    r"Robust bound: $\sqrt{c_2/c_1}\|x_{0,i}\|e^{-3c_3 t/2}$",
-                    r"Baseline bound: $\sqrt{c_2/c_1}\|x_{0,i}\|e^{-3c_3 t/2}$",
+                    r"Robust bound: $\sqrt{c_2/c_1}\|x_{0,i}\|e^{-c_3 t/2}$",
+                    r"Baseline bound: $\sqrt{c_2/c_1}\|x_{0,i}\|e^{-c_3 t/2}$",
                 ],
                 loc="best",
             )
@@ -312,7 +339,7 @@ def _bound_exceedance_fraction_per_episode(
     """Return per-episode fraction of trajectories that ever exceed norm bound.
 
     Bound for each trajectory i in episode e:
-        b_{e,i}(t) = sqrt(c2/c1) * ||x0_{e,i}|| * exp(-3*c3*t/2)
+        b_{e,i}(t) = sqrt(c2/c1) * ||x0_{e,i}|| * exp(-c3*t/2)
     """
     robust_norm = np.sqrt(robust_theta**2 + robust_thetad**2)  # (E, N, T)
     num_episodes, _, steps = robust_norm.shape
@@ -330,7 +357,7 @@ def _bound_exceedance_fraction_per_episode(
 
     for ep in range(num_episodes):
         gain = np.sqrt(float(c2) / float(c1))
-        decay = np.exp(-1.5 * float(c3) * t)[None, :]  # (1, T)
+        decay = np.exp(-0.5 * float(c3) * t)[None, :]  # (1, T)
         robust_bound = gain * robust_norm[ep, :, 0][:, None] * decay  # (N, T)
 
         # Ignore t=0 and use tolerance to avoid floating-point false positives.
@@ -363,11 +390,185 @@ def plot_bound_exceedance_fraction(
     ax.axhline(1.0 - float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$1-\alpha$")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Fraction of trajectories")
-    ax.set_title(r"Fraction with $\exists t:\|x_t\| > \sqrt{c_2/c_1}\|x_0\|e^{-3c_3 t/2}$")
+    ax.set_title(r"Fraction with $\exists t:\|x_t\| > \sqrt{c_2/c_1}\|x_0\|e^{-c_3 t/2}$")
     ax.set_ylim(-0.02, 1.02)
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
     _save_or_show(fig, out_path, show)
+
+
+def _as_episode_batch(data: np.ndarray, name: str) -> np.ndarray:
+    """Normalize trajectory tensors to shape (E, N, T)."""
+    arr = np.asarray(data, dtype=np.float64)
+    if arr.ndim == 2:
+        return arr[None, ...]
+    if arr.ndim == 3:
+        return arr
+    raise ValueError(f"{name} must have shape (N,T) or (E,N,T); got {arr.shape}")
+
+
+def _prepare_spd_matrix(P_raw: np.ndarray, tol_eig: float = 1e-12) -> tuple[np.ndarray, np.ndarray, float]:
+    """Symmetrize P if needed and verify positive definiteness."""
+    P = np.asarray(P_raw, dtype=np.float64)
+    if P.shape != (2, 2):
+        raise ValueError(f"P must have shape (2,2), got {P.shape}")
+    sym_err = float(np.linalg.norm(P - P.T, ord="fro"))
+    if sym_err > 1e-12:
+        print(f"[diag] P is not symmetric (||P-P^T||_F={sym_err:.3e}); applying P <- (P+P^T)/2.")
+        P = 0.5 * (P + P.T)
+    eigvals = np.linalg.eigvalsh(P)
+    if float(np.min(eigvals)) <= tol_eig:
+        raise RuntimeError(
+            f"P is not SPD; eigenvalues={eigvals.tolist()} (tol={tol_eig}). "
+            "Lyapunov norm bound assumptions are violated."
+        )
+    return P, eigvals, sym_err
+
+
+def run_lyapunov_consistency_checks(
+    theta: np.ndarray,
+    thetad: np.ndarray,
+    v_saved: np.ndarray,
+    dt: float,
+    c3: float,
+    c1: float | None,
+    c2: float | None,
+    P: np.ndarray | None,
+    label: str,
+    tol: float = DEFAULT_TOL,
+) -> None:
+    """Run full consistency checks and print first counterexample if present."""
+    theta_ep = _as_episode_batch(theta, f"{label}.theta")
+    thetad_ep = _as_episode_batch(thetad, f"{label}.thetad")
+    v_ep = _as_episode_batch(v_saved, f"{label}.v")
+
+    if theta_ep.shape != thetad_ep.shape or theta_ep.shape != v_ep.shape:
+        raise ValueError(
+            f"{label}: theta/thetad/v must have identical shapes; got "
+            f"{theta_ep.shape}, {thetad_ep.shape}, {v_ep.shape}"
+        )
+    if dt <= 0.0:
+        raise ValueError(f"{label}: dt must be positive, got {dt}.")
+    if not np.isfinite(c3):
+        raise ValueError(f"{label}: c3 must be finite, got {c3}.")
+
+    x = np.stack([theta_ep, thetad_ep], axis=-1)  # (E, N, T, 2)
+    norms2 = np.linalg.norm(x, ord=2, axis=-1)
+    norms_manual = np.sqrt(theta_ep**2 + thetad_ep**2)
+    norm_diff = float(np.max(np.abs(norms2 - norms_manual)))
+    if norm_diff > 1e-12:
+        raise RuntimeError(
+            f"{label}: non-Euclidean norm mismatch detected (max |norm2-manual|={norm_diff:.3e})."
+        )
+
+    num_episodes, _, steps = theta_ep.shape
+    t = np.arange(steps, dtype=np.float64) * float(dt)
+
+    sym_err = np.nan
+    eigvals = np.array([], dtype=np.float64)
+    p_used = None
+    if P is not None:
+        p_used, eigvals, sym_err = _prepare_spd_matrix(P)
+        v_from_p = np.einsum("...i,ij,...j->...", x, p_used, x)
+        v_abs_err = np.abs(v_ep - v_from_p)
+        max_v_abs_err = float(np.max(v_abs_err))
+        if max_v_abs_err > 1e-8:
+            idx = np.argwhere(v_abs_err > 1e-8)[0]
+            e, i, k = int(idx[0]), int(idx[1]), int(idx[2])
+            print(
+                f"[diag:{label}] V mismatch at first index (ep={e}, traj={i}, step={k}): "
+                f"saved={v_ep[e, i, k]:.12g}, x^T P x={v_from_p[e, i, k]:.12g}, "
+                f"abs_err={v_abs_err[e, i, k]:.3e}"
+            )
+            raise RuntimeError(f"{label}: saved V is not consistent with x^T P x.")
+        if np.any(v_from_p < -tol):
+            idx = np.argwhere(v_from_p < -tol)[0]
+            e, i, k = int(idx[0]), int(idx[1]), int(idx[2])
+            raise RuntimeError(
+                f"{label}: negative V encountered at (ep={e}, traj={i}, step={k}): "
+                f"V={v_from_p[e, i, k]:.6e}. P may be non-SPD or V computation is inconsistent."
+            )
+        c1_from_p = float(np.min(eigvals))
+        c2_from_p = float(np.max(eigvals))
+        if c1 is None or c2 is None:
+            c1 = c1_from_p
+            c2 = c2_from_p
+            print(f"[diag:{label}] c1/c2 not present; using eigenvalue bounds from saved P.")
+        else:
+            if not np.isclose(float(c1), c1_from_p, rtol=1e-8, atol=1e-10):
+                raise RuntimeError(
+                    f"{label}: c1 mismatch. saved c1={float(c1):.12g}, lambda_min(P)={c1_from_p:.12g}"
+                )
+            if not np.isclose(float(c2), c2_from_p, rtol=1e-8, atol=1e-10):
+                raise RuntimeError(
+                    f"{label}: c2 mismatch. saved c2={float(c2):.12g}, lambda_max(P)={c2_from_p:.12g}"
+                )
+    else:
+        print(
+            f"[diag:{label}] P not found in dataset. Cannot verify SPD/symmetry or "
+            "that V(x)=x^T P x with this file."
+        )
+
+    if c1 is None or c2 is None:
+        raise RuntimeError(f"{label}: c1/c2 unavailable; cannot evaluate implied norm bound.")
+    if c1 <= 0.0 or c2 <= 0.0 or c2 < c1:
+        raise RuntimeError(f"{label}: invalid c1/c2 values: c1={c1}, c2={c2}.")
+
+    # Trajectory-specific V condition: V_t <= V_0 * exp(-c3*t), with t = k*dt.
+    v_rhs = v_ep[:, :, 0][:, :, None] * np.exp(-float(c3) * t)[None, None, :]
+    v_violation = v_ep > (v_rhs + tol)
+    v_violation[:, :, 0] = False  # ignore t=0 roundoff
+
+    # Implied Euclidean norm condition: ||x_t|| <= sqrt(c2/c1)*||x0||*exp(-c3*t/2).
+    gain = np.sqrt(float(c2) / float(c1))
+    norm_rhs = gain * norms2[:, :, 0][:, :, None] * np.exp(-0.5 * float(c3) * t)[None, None, :]
+    norm_violation = norms2 > (norm_rhs + tol)
+    norm_violation[:, :, 0] = False  # ignore t=0 roundoff
+
+    n_v_viol = int(np.count_nonzero(v_violation))
+    n_n_viol = int(np.count_nonzero(norm_violation))
+    total = int(np.prod(v_ep.shape))
+    print(
+        f"[diag:{label}] checked {total} samples with dt={dt:.6g}, c3={c3:.6g}. "
+        f"V violations={n_v_viol}, norm violations={n_n_viol}."
+    )
+
+    if n_n_viol > 0:
+        idx = np.argwhere(norm_violation)[0]
+        e, i, k = int(idx[0]), int(idx[1]), int(idx[2])
+        x0 = x[e, i, 0]
+        xt = x[e, i, k]
+        norm_x0 = float(norms2[e, i, 0])
+        norm_xt = float(norms2[e, i, k])
+        v0 = float(v_ep[e, i, 0])
+        vt = float(v_ep[e, i, k])
+        rhs_v = float(v_rhs[e, i, k])
+        rhs_n = float(norm_rhs[e, i, k])
+        r_v = vt / rhs_v if rhs_v > 0.0 else np.inf
+        r_n = norm_xt / rhs_n if rhs_n > 0.0 else np.inf
+        print(f"[diag:{label}] first norm-bound violation at (episode={e}, traj={i}, step={k})")
+        print(
+            f"  t={t[k]:.6f}, x0={x0.tolist()}, xt={xt.tolist()}, "
+            f"||x0||_2={norm_x0:.12g}, ||xt||_2={norm_xt:.12g}"
+        )
+        print(
+            f"  V(x0)={v0:.12g}, V(xt)={vt:.12g}, RHS_V={rhs_v:.12g}, "
+            f"c1={float(c1):.12g}, c2={float(c2):.12g}, RHS_norm={rhs_n:.12g}"
+        )
+        print(f"  rV={r_v:.12g}, rN={r_n:.12g}")
+        if p_used is not None:
+            print(
+                f"  eig(P)={eigvals.tolist()}, symmetry_error_F={sym_err:.3e}"
+            )
+        if n_v_viol == 0:
+            raise RuntimeError(
+                f"{label}: Found norm-bound violation while V-bound has zero violations. "
+                "This indicates an implementation mismatch in assumptions/constants."
+            )
+    elif n_v_viol > 0:
+        idx = np.argwhere(v_violation)[0]
+        e, i, k = int(idx[0]), int(idx[1]), int(idx[2])
+        print(f"[diag:{label}] first V-bound violation at (episode={e}, traj={i}, step={k}), t={t[k]:.6f}")
 
 
 def _v_exceedance_fraction_per_episode(
@@ -446,10 +647,56 @@ def main() -> None:
     c3 = float(data["c3"]) if "c3" in data.files else 0.5
     c1 = float(data["c1"]) if "c1" in data.files else None
     c2 = float(data["c2"]) if "c2" in data.files else None
+    p_matrix = np.asarray(data["P"], dtype=np.float64) if "P" in data.files else None
     alpha = float(data["alpha"]) if "alpha" in data.files else 0.1
+
+    if p_matrix is not None:
+        p_used, p_eigs, p_sym_err = _prepare_spd_matrix(p_matrix)
+        c1_from_p = float(np.min(p_eigs))
+        c2_from_p = float(np.max(p_eigs))
+        if c1 is not None and not np.isclose(c1, c1_from_p, rtol=1e-8, atol=1e-10):
+            print(
+                f"c1 mismatch against P detected: saved c1={c1:.12g}, "
+                f"lambda_min(P)={c1_from_p:.12g}. Using lambda_min(P)."
+            )
+        if c2 is not None and not np.isclose(c2, c2_from_p, rtol=1e-8, atol=1e-10):
+            print(
+                f"c2 mismatch against P detected: saved c2={c2:.12g}, "
+                f"lambda_max(P)={c2_from_p:.12g}. Using lambda_max(P)."
+            )
+        c1 = c1_from_p
+        c2 = c2_from_p
+        p_matrix = p_used
+        if p_sym_err <= 1e-12:
+            print(f"P symmetry check passed: ||P-P^T||_F={p_sym_err:.3e}")
 
     if c1 is None or c2 is None:
         print("c1/c2 not found in data file; norm bound line will be skipped.")
+    if p_matrix is None:
+        print("P not found in data file; full Lyapunov/SPD consistency checks are limited.")
+
+    run_lyapunov_consistency_checks(
+        theta=theta,
+        thetad=thetad,
+        v_saved=v,
+        dt=dt,
+        c3=c3,
+        c1=c1,
+        c2=c2,
+        P=p_matrix,
+        label="robust",
+    )
+    run_lyapunov_consistency_checks(
+        theta=theta_baseline,
+        thetad=thetad_baseline,
+        v_saved=v_baseline,
+        dt=dt,
+        c3=c3,
+        c1=c1,
+        c2=c2,
+        P=p_matrix,
+        label="baseline",
+    )
 
     plot_rq(r_j, q_j, out_path=os.path.join(args.out_dir, "rj_qj.png"), show=args.show)
     plot_episode_comparison(

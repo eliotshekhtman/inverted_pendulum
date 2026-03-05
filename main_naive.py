@@ -66,6 +66,11 @@ def main() -> None:
         max_p_condition=1e7,
     )
     print(f"CLF linearization gain K used: {controller.k_fb.tolist()}")
+    p_eigs = np.linalg.eigvalsh(controller.P)
+    c1 = float(np.min(p_eigs))
+    c2 = float(np.max(p_eigs))
+    p_sym_error = float(np.linalg.norm(controller.P - controller.P.T, ord="fro"))
+    print(f"CLF eigenvalue bounds: c1={c1:.6f}, c2={c2:.6f}")
 
     r_j = float(r_0)
     r_history = [r_j]
@@ -174,7 +179,12 @@ def main() -> None:
         seed=int(seed),
         baseline_seed=int(baseline_seed),
         k_fb=np.asarray(controller.k_fb, dtype=np.float64),
+        P=np.asarray(controller.P, dtype=np.float64),
+        p_eigvals=np.asarray(p_eigs, dtype=np.float64),
+        p_sym_error=p_sym_error,
         c3=float(controller.c3),
+        c1=float(c1),
+        c2=float(c2),
         delta=float(delta),
         alpha=float(alpha),
         alpha_bar=float(alpha_bar),
