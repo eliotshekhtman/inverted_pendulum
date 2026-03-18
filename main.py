@@ -19,7 +19,7 @@ def main() -> None:
     delta = 0.10
     kappa = 0.8
     r_0 = 2.0
-    num_episodes = 3
+    num_episodes = 5
     num_calibration_trajs = 200
     num_eval_trajs = 100
     dt = 0.02

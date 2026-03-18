@@ -8,6 +8,8 @@ Expected arrays in the file:
 - v: (num_episodes, num_trajs, steps) robust trajectories
 - theta_baseline/thetad_baseline/v_baseline: baseline trajectories (r=0),
   either shape (num_trajs, steps) or (num_episodes, num_trajs, steps)
+- residuals: (num_episodes, num_trajs, steps, 2) robust residual traces
+- residuals_baseline: baseline residual traces (num_trajs, steps, 2)
 - optional P (2x2), c1, c2, c3: used for Lyapunov consistency checks and bounds
 """
 
@@ -24,6 +26,7 @@ import matplotlib.pyplot as plt
 
 
 DEFAULT_TOL = 1e-9
+OUTPUT_EXT = ".pdf"
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,7 +51,9 @@ def _save_or_show(fig: plt.Figure, path: str, show: bool) -> None:
     if show:
         plt.show()
     else:
-        fig.savefig(path, dpi=150)
+        base, _ = os.path.splitext(path)
+        pdf_path = base + OUTPUT_EXT
+        fig.savefig(pdf_path, dpi=150)
         plt.close(fig)
 
 
@@ -255,6 +260,113 @@ def _progress_metric(theta: np.ndarray, thetad: np.ndarray) -> np.ndarray:
     return np.mean(per_traj, axis=1)  # (E,)
 
 
+def _as_episode_residual_batch(data: np.ndarray, name: str) -> np.ndarray:
+    """Normalize residual tensors to shape (E, N, T, 2)."""
+    arr = np.asarray(data, dtype=np.float64)
+    if arr.ndim == 3:
+        return arr[None, ...]
+    if arr.ndim == 4:
+        return arr
+    raise ValueError(f"{name} must have shape (N,T,2) or (E,N,T,2); got {arr.shape}")
+
+
+def _peak_residual_stats_by_episode(
+    residuals: np.ndarray,
+    baseline_residuals: np.ndarray,
+    q_low: float = 0.10,
+    q_high: float = 0.90,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute max residual norm per trajectory and trajectory-wise 10/90 quantiles per episode."""
+    if q_low < 0.0 or q_low > 1.0 or q_high < 0.0 or q_high > 1.0 or q_low >= q_high:
+        raise ValueError("Require 0 <= q_low < q_high <= 1.")
+
+    r = _as_episode_residual_batch(residuals, "residuals")  # (E,N,T,2)
+    b = _as_episode_residual_batch(baseline_residuals, "residuals_baseline")  # (E,N,T,2) or (1,N,T,2)
+
+    r_mag = np.linalg.norm(r, ord=2, axis=-1)  # (E,N,T)
+    b_mag = np.linalg.norm(b, ord=2, axis=-1)  # (E_b,N,T)
+
+    r_peak = np.max(r_mag, axis=2)  # (E,N)
+    b_peak = np.max(b_mag, axis=2)  # (E_b,N)
+
+    robust_mean = np.mean(r_peak, axis=1)  # (E,)
+    robust_q10 = np.quantile(r_peak, q_low, axis=1)
+    robust_q90 = np.quantile(r_peak, q_high, axis=1)
+
+    baseline_mean = np.mean(b_peak, axis=1)
+    baseline_q10 = np.quantile(b_peak, q_low, axis=1)
+    baseline_q90 = np.quantile(b_peak, q_high, axis=1)
+
+    num_episodes = int(r_peak.shape[0])
+    if baseline_mean.size == 1 and num_episodes > 1:
+        baseline_mean = np.full(num_episodes, float(baseline_mean[0]), dtype=np.float64)
+        baseline_q10 = np.full(num_episodes, float(baseline_q10[0]), dtype=np.float64)
+        baseline_q90 = np.full(num_episodes, float(baseline_q90[0]), dtype=np.float64)
+    elif baseline_mean.size != num_episodes:
+        raise ValueError("Baseline residuals episodes must be 1 or match robust episode count.")
+
+    return (
+        robust_mean,
+        robust_q10,
+        robust_q90,
+        baseline_mean,
+        baseline_q10,
+        baseline_q90,
+    )
+
+
+def plot_residual_peak_episode(
+    robust_mean: np.ndarray,
+    robust_q10: np.ndarray,
+    robust_q90: np.ndarray,
+    baseline_mean: np.ndarray,
+    baseline_q10: np.ndarray,
+    baseline_q90: np.ndarray,
+    out_path: str,
+    show: bool,
+) -> None:
+    """Plot max residual magnitude per trajectory with 10/90 quantile error bars."""
+    episodes = np.arange(robust_mean.size)
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    yerr_robust = np.vstack([
+        np.maximum(0.0, robust_mean - robust_q10),
+        np.maximum(0.0, robust_q90 - robust_mean),
+    ])
+    yerr_baseline = np.vstack([
+        np.maximum(0.0, baseline_mean - baseline_q10),
+        np.maximum(0.0, baseline_q90 - baseline_mean),
+    ])
+
+    ax.errorbar(
+        episodes,
+        robust_mean,
+        yerr=yerr_robust,
+        marker="o",
+        linewidth=2.0,
+        color="tab:orange",
+        capsize=4,
+        label="Robust max residual",
+    )
+    ax.errorbar(
+        episodes,
+        baseline_mean,
+        yerr=yerr_baseline,
+        marker="s",
+        linewidth=2.0,
+        color="tab:blue",
+        capsize=4,
+        label="Baseline (r=0) max residual",
+    )
+
+    ax.set_xlabel("Episode")
+    ax.set_ylabel(r"max$_{t\in[0,T]} \| \hat f(x_t,u_t)-f(x_t,u_t)\|_2$")
+    ax.set_title("Residual Magnitude Peaks vs Episode")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="best")
+    _save_or_show(fig, out_path, show)
+
+
 def _baseline_metric(
     theta_baseline: np.ndarray,
     thetad_baseline: np.ndarray,
@@ -387,7 +499,7 @@ def plot_bound_exceedance_fraction(
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(episodes, robust_frac, marker="o", linewidth=2.0, color="tab:orange", label="Robust")
     ax.plot(episodes, baseline_frac, marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
-    ax.axhline(1.0 - float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$1-\alpha$")
+    ax.axhline(float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$\alpha$")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Fraction of trajectories")
     ax.set_title(r"Fraction with $\exists t:\|x_t\| > \sqrt{c_2/c_1}\|x_0\|e^{-c_3 t/2}$")
@@ -620,7 +732,7 @@ def plot_v_exceedance_fraction(
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(episodes, robust_frac, marker="o", linewidth=2.0, color="tab:orange", label="Robust")
     ax.plot(episodes, baseline_frac, marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
-    ax.axhline(1.0 - float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$1-\alpha$")
+    ax.axhline(float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$\alpha$")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Fraction of trajectories")
     ax.set_title(r"Fraction with $\exists t: V(x_t) > V(x_0)e^{-c_3 t}$")
@@ -640,9 +752,11 @@ def main() -> None:
     theta = np.asarray(data["theta"], dtype=np.float64)
     thetad = np.asarray(data["thetad"], dtype=np.float64)
     v = np.asarray(data["v"], dtype=np.float64)
+    residuals = np.asarray(data["residuals"], dtype=np.float64)
     theta_baseline = np.asarray(data["theta_baseline"], dtype=np.float64)
     thetad_baseline = np.asarray(data["thetad_baseline"], dtype=np.float64)
     v_baseline = np.asarray(data["v_baseline"], dtype=np.float64)
+    residuals_baseline = np.asarray(data["residuals_baseline"], dtype=np.float64)
     dt = float(data["dt"])
     c3 = float(data["c3"]) if "c3" in data.files else 0.5
     c1 = float(data["c1"]) if "c1" in data.files else None
@@ -741,6 +855,27 @@ def main() -> None:
         c1=c1,
         c2=c2,
         c3=c3,
+    )
+    (
+        robust_r_mean,
+        robust_r_q10,
+        robust_r_q90,
+        baseline_r_mean,
+        baseline_r_q10,
+        baseline_r_q90,
+    ) = _peak_residual_stats_by_episode(
+        residuals=residuals,
+        baseline_residuals=residuals_baseline,
+    )
+    plot_residual_peak_episode(
+        robust_mean=robust_r_mean,
+        robust_q10=robust_r_q10,
+        robust_q90=robust_r_q90,
+        baseline_mean=baseline_r_mean,
+        baseline_q10=baseline_r_q10,
+        baseline_q90=baseline_r_q90,
+        out_path=os.path.join(args.out_dir, "residual_peak_vs_episode.png"),
+        show=args.show,
     )
 
     robust_final_norm = _final_state_norm_metric(theta, thetad)
