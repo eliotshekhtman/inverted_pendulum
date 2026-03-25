@@ -180,6 +180,9 @@ def _plot_episode_comparison(
         steps = min(steps, naive_data.shape[2])
         robust_data = robust_data[:num_episodes, :num_trajs, :steps]
         naive_data = naive_data[:num_episodes, :num_trajs, :steps]
+    if num_episodes <= 1:
+        print(f"[plot_combined] Skipping {file_stem} per-episode plots: need at least 2 episodes.")
+        return
 
     if calibrate_data is not None:
         calibrate_data = np.asarray(calibrate_data, dtype=np.float64)
@@ -187,7 +190,7 @@ def _plot_episode_comparison(
 
     t = np.arange(steps) * float(dt)
 
-    for ep in range(num_episodes):
+    for ep in range(1, num_episodes):
         robust_ep = robust_data[ep]
         naive_ep = naive_data[ep]
         baseline_ep = np.concatenate(
@@ -309,6 +312,9 @@ def _plot_norm_episode_comparison(
         raise ValueError("robust and naive state tensors must have matching shape.")
 
     num_episodes, _, steps = robust_norm.shape
+    if num_episodes <= 1:
+        print("[plot_combined] Skipping norm per-episode plots: need at least 2 episodes.")
+        return
     t = np.arange(steps) * float(dt)
 
     baseline_norm_robust = np.sqrt(baseline_theta_robust**2 + baseline_thetad_robust**2)
@@ -321,7 +327,7 @@ def _plot_norm_episode_comparison(
         calibrate_norm_naive = np.asarray(calibrate_norm_naive, dtype=np.float64)
         calibrate_norm_naive = calibrate_norm_naive[:num_episodes, :, :steps]
 
-    for ep in range(num_episodes):
+    for ep in range(1, num_episodes):
         baseline_ep = np.concatenate(
             [
                 _baseline_episode(baseline_norm_robust, ep),
@@ -660,17 +666,20 @@ def _plot_fraction_metric(
     n = min(robust_frac.size, naive_frac.size, nonrobust_frac.size)
     if calibrate_frac is not None:
         n = min(n, int(np.asarray(calibrate_frac).size))
-    episodes = np.arange(n)
+    if n <= 1:
+        print(f"[plot_combined] Skipping '{title}' plot: need at least 2 episodes.")
+        return
+    episodes = np.arange(1, n)
     if calibrate_frac is not None:
         calibrate_frac = np.asarray(calibrate_frac, dtype=np.float64)[:n]
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(episodes, robust_frac[:n], marker="o", linewidth=2.0, color="tab:orange", label="Robust")
-    ax.plot(episodes, naive_frac[:n], marker="s", linewidth=2.0, color="tab:green", label="Naive")
-    ax.plot(episodes, nonrobust_frac[:n], marker="d", linewidth=2.0, color="tab:blue", label="Nonrobust")
+    ax.plot(episodes, robust_frac[1:n], marker="o", linewidth=2.0, color="tab:orange", label="Robust")
+    ax.plot(episodes, naive_frac[1:n], marker="s", linewidth=2.0, color="tab:green", label="Naive")
+    ax.plot(episodes, nonrobust_frac[1:n], marker="d", linewidth=2.0, color="tab:blue", label="Nonrobust")
     if calibrate_frac is not None:
         ax.plot(
             episodes,
-            calibrate_frac,
+            calibrate_frac[1:n],
             marker="^",
             linewidth=2.0,
             color="tab:purple",
@@ -716,25 +725,28 @@ def _plot_residual_peak_metric(
     )
     if calibrate_mean is not None:
         n = min(n, int(np.asarray(calibrate_mean).size))
-    episodes = np.arange(n)
+    if n <= 1:
+        print("[plot_combined] Skipping residual peak plot: need at least 2 episodes.")
+        return
+    episodes = np.arange(1, n)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     rerr = np.vstack([
-        np.maximum(0.0, robust_mean[:n] - robust_q10[:n]),
-        np.maximum(0.0, robust_q90[:n] - robust_mean[:n]),
+        np.maximum(0.0, robust_mean[1:n] - robust_q10[1:n]),
+        np.maximum(0.0, robust_q90[1:n] - robust_mean[1:n]),
     ])
     nerr = np.vstack([
-        np.maximum(0.0, naive_mean[:n] - naive_q10[:n]),
-        np.maximum(0.0, naive_q90[:n] - naive_mean[:n]),
+        np.maximum(0.0, naive_mean[1:n] - naive_q10[1:n]),
+        np.maximum(0.0, naive_q90[1:n] - naive_mean[1:n]),
     ])
     berr = np.vstack([
-        np.maximum(0.0, nonrobust_mean[:n] - nonrobust_q10[:n]),
-        np.maximum(0.0, nonrobust_q90[:n] - nonrobust_mean[:n]),
+        np.maximum(0.0, nonrobust_mean[1:n] - nonrobust_q10[1:n]),
+        np.maximum(0.0, nonrobust_q90[1:n] - nonrobust_mean[1:n]),
     ])
 
     ax.errorbar(
         episodes,
-        robust_mean[:n],
+        robust_mean[1:n],
         yerr=rerr,
         marker="o",
         linewidth=2.0,
@@ -744,7 +756,7 @@ def _plot_residual_peak_metric(
     )
     ax.errorbar(
         episodes,
-        naive_mean[:n],
+        naive_mean[1:n],
         yerr=nerr,
         marker="s",
         linewidth=2.0,
@@ -754,7 +766,7 @@ def _plot_residual_peak_metric(
     )
     ax.errorbar(
         episodes,
-        nonrobust_mean[:n],
+        nonrobust_mean[1:n],
         yerr=berr,
         marker="d",
         linewidth=2.0,
@@ -766,7 +778,7 @@ def _plot_residual_peak_metric(
         calibrate_mean = np.asarray(calibrate_mean, dtype=np.float64)[:n]
         ax.plot(
             episodes,
-            calibrate_mean,
+            calibrate_mean[1:n],
             marker="^",
             linewidth=2.0,
             color="tab:purple",
@@ -815,7 +827,10 @@ def _plot_metric(
     )
     if calibrate_metric is not None:
         n = min(n, int(np.asarray(calibrate_metric).size))
-    episodes = np.arange(n)
+    if n <= 1:
+        print(f"[plot_combined] Skipping '{title}' plot: need at least 2 episodes.")
+        return
+    episodes = np.arange(1, n)
     robust_metric = np.asarray(robust_metric, dtype=np.float64)[:n]
     naive_metric = np.asarray(naive_metric, dtype=np.float64)[:n]
     robust_metric_q10 = np.asarray(robust_metric_q10, dtype=np.float64)[:n]
@@ -827,16 +842,16 @@ def _plot_metric(
 
     fig, ax = plt.subplots(figsize=(8, 5))
     robust_err = np.vstack([
-        np.maximum(0.0, robust_metric - robust_metric_q10),
-        np.maximum(0.0, robust_metric_q90 - robust_metric),
+        np.maximum(0.0, robust_metric[1:n] - robust_metric_q10[1:n]),
+        np.maximum(0.0, robust_metric_q90[1:n] - robust_metric[1:n]),
     ])
     naive_err = np.vstack([
-        np.maximum(0.0, naive_metric - naive_metric_q10),
-        np.maximum(0.0, naive_metric_q90 - naive_metric),
+        np.maximum(0.0, naive_metric[1:n] - naive_metric_q10[1:n]),
+        np.maximum(0.0, naive_metric_q90[1:n] - naive_metric[1:n]),
     ])
     ax.errorbar(
         episodes,
-        robust_metric,
+        robust_metric[1:n],
         yerr=robust_err,
         marker="o",
         linewidth=2.0,
@@ -846,7 +861,7 @@ def _plot_metric(
     )
     ax.errorbar(
         episodes,
-        naive_metric,
+        naive_metric[1:n],
         yerr=naive_err,
         marker="s",
         linewidth=2.0,
@@ -854,7 +869,7 @@ def _plot_metric(
         color="tab:green",
         label="Naive",
     )
-    nonrobust_series = np.full(n, nonrobust_scalar, dtype=np.float64)
+    nonrobust_series = np.full(episodes.shape[0], nonrobust_scalar, dtype=np.float64)
     ax.plot(
         episodes,
         nonrobust_series,
@@ -866,7 +881,7 @@ def _plot_metric(
     if calibrate_metric is not None:
         ax.plot(
             episodes,
-            calibrate_metric,
+            calibrate_metric[1:n],
             marker="^",
             linewidth=2.0,
             color="tab:purple",

@@ -83,6 +83,9 @@ def plot_episode_comparison(
 ) -> None:
     """Create one figure per episode, overlaying robust and baseline trajectories."""
     num_episodes, _, steps = robust_data.shape
+    if num_episodes <= 1:
+        print(f"[plot_rollout_data] Skipping {file_stem} per-episode plots: need at least 2 episodes.")
+        return
     t = np.arange(steps) * dt
 
     if baseline_data.ndim not in (2, 3):
@@ -93,7 +96,7 @@ def plot_episode_comparison(
             return baseline_data
         return baseline_data[ep]
 
-    for ep in range(num_episodes):
+    for ep in range(1, num_episodes):
         baseline_ep = baseline_for_episode(ep)
         if baseline_ep.shape[1] != steps:
             raise ValueError("Baseline and robust data must have the same number of timesteps.")
@@ -173,6 +176,9 @@ def plot_norm_episode_comparison(
     """Plot ||x_t|| over time per episode, with optional per-trajectory decay bounds."""
     robust_norm = np.sqrt(robust_theta**2 + robust_thetad**2)  # (E, N, T)
     num_episodes, _, steps = robust_norm.shape
+    if num_episodes <= 1:
+        print("[plot_rollout_data] Skipping state norm per-episode plots: need at least 2 episodes.")
+        return
     t = np.arange(steps) * dt
 
     if baseline_theta.ndim == 2:
@@ -182,7 +188,7 @@ def plot_norm_episode_comparison(
     else:
         raise ValueError("baseline theta/thetad must be shape (N,T) or (E,N,T)")
 
-    for ep in range(num_episodes):
+    for ep in range(1, num_episodes):
         if baseline_norm.ndim == 2:
             baseline_ep = baseline_norm
         else:
@@ -326,21 +332,24 @@ def plot_residual_peak_episode(
     show: bool,
 ) -> None:
     """Plot max residual magnitude per trajectory with 10/90 quantile error bars."""
-    episodes = np.arange(robust_mean.size)
+    if robust_mean.size <= 1:
+        print("[plot_rollout_data] Skipping residual peak plot: need at least 2 episodes.")
+        return
+    episodes = np.arange(1, robust_mean.size)
     fig, ax = plt.subplots(figsize=(8, 5))
 
     yerr_robust = np.vstack([
-        np.maximum(0.0, robust_mean - robust_q10),
-        np.maximum(0.0, robust_q90 - robust_mean),
+        np.maximum(0.0, robust_mean[1:] - robust_q10[1:]),
+        np.maximum(0.0, robust_q90[1:] - robust_mean[1:]),
     ])
     yerr_baseline = np.vstack([
-        np.maximum(0.0, baseline_mean - baseline_q10),
-        np.maximum(0.0, baseline_q90 - baseline_mean),
+        np.maximum(0.0, baseline_mean[1:] - baseline_q10[1:]),
+        np.maximum(0.0, baseline_q90[1:] - baseline_mean[1:]),
     ])
 
     ax.errorbar(
         episodes,
-        robust_mean,
+        robust_mean[1:],
         yerr=yerr_robust,
         marker="o",
         linewidth=2.0,
@@ -350,7 +359,7 @@ def plot_residual_peak_episode(
     )
     ax.errorbar(
         episodes,
-        baseline_mean,
+        baseline_mean[1:],
         yerr=yerr_baseline,
         marker="s",
         linewidth=2.0,
@@ -406,9 +415,13 @@ def plot_episode_metric(
     show: bool,
 ) -> None:
     """Plot one per-episode scalar metric for robust and baseline controllers."""
-    episodes = np.arange(robust_metric.size)
+    robust_metric = np.asarray(robust_metric, dtype=np.float64)
+    if robust_metric.size <= 1:
+        print(f"[plot_rollout_data] Skipping '{title}' plot: need at least 2 episodes.")
+        return
+    episodes = np.arange(1, robust_metric.size)
     fig, ax = plt.subplots(figsize=(8, 5))
-    robust_handle = ax.plot(episodes, robust_metric, marker="o", linewidth=2.0, color="tab:orange", label="Robust")[0]
+    robust_handle = ax.plot(episodes, robust_metric[1:], marker="o", linewidth=2.0, color="tab:orange", label="Robust")[0]
 
     if np.isscalar(baseline_metric):
         baseline_handle = ax.axhline(
@@ -422,7 +435,7 @@ def plot_episode_metric(
         baseline_metric = np.asarray(baseline_metric, dtype=np.float64)
         baseline_handle = ax.plot(
             episodes,
-            baseline_metric,
+            baseline_metric[1:],
             marker="s",
             linewidth=2.0,
             color="tab:blue",
@@ -495,10 +508,15 @@ def plot_bound_exceedance_fraction(
     show: bool,
 ) -> None:
     """Plot per-episode fraction of trajectories with bound exceedance."""
-    episodes = np.arange(robust_frac.size)
+    robust_frac = np.asarray(robust_frac, dtype=np.float64)
+    baseline_frac = np.asarray(baseline_frac, dtype=np.float64)
+    if robust_frac.size <= 1:
+        print("[plot_rollout_data] Skipping norm-bound exceedance plot: need at least 2 episodes.")
+        return
+    episodes = np.arange(1, robust_frac.size)
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(episodes, robust_frac, marker="o", linewidth=2.0, color="tab:orange", label="Robust")
-    ax.plot(episodes, baseline_frac, marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
+    ax.plot(episodes, robust_frac[1:], marker="o", linewidth=2.0, color="tab:orange", label="Robust")
+    ax.plot(episodes, baseline_frac[1:], marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
     ax.axhline(float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$\alpha$")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Fraction of trajectories")
@@ -728,10 +746,15 @@ def plot_v_exceedance_fraction(
     show: bool,
 ) -> None:
     """Plot per-episode fraction of trajectories with V-condition exceedance."""
-    episodes = np.arange(robust_frac.size)
+    robust_frac = np.asarray(robust_frac, dtype=np.float64)
+    baseline_frac = np.asarray(baseline_frac, dtype=np.float64)
+    if robust_frac.size <= 1:
+        print("[plot_rollout_data] Skipping V-bound exceedance plot: need at least 2 episodes.")
+        return
+    episodes = np.arange(1, robust_frac.size)
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(episodes, robust_frac, marker="o", linewidth=2.0, color="tab:orange", label="Robust")
-    ax.plot(episodes, baseline_frac, marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
+    ax.plot(episodes, robust_frac[1:], marker="o", linewidth=2.0, color="tab:orange", label="Robust")
+    ax.plot(episodes, baseline_frac[1:], marker="s", linewidth=2.0, color="tab:blue", label="Baseline (r=0)")
     ax.axhline(float(alpha), linestyle=":", linewidth=2.0, color="k", label=r"$\alpha$")
     ax.set_xlabel("Episode")
     ax.set_ylabel("Fraction of trajectories")
